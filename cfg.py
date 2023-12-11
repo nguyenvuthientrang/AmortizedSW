@@ -177,5 +177,10 @@ def parse_args():
         help="the base resolution of the GAN")
     parser.add_argument('--random_seed', type=int, default=12345)
 
+    parser.add_argument('--slicer', type=str, default="sw",
+                         help="Slice type")
+    parser.add_argument('--activation',nargs='+')
+    parser.add_argument('--use_D', action='store_true', default=False, help='Use discriminator')
+
     opt = parser.parse_args()
     return opt

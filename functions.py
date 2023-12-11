@@ -97,7 +97,7 @@ def train(args, gen_net: nn.Module, dis_net: nn.Module, gen_optimizer, dis_optim
 
         writer_dict['train_global_steps'] = global_steps + 1
 
-def train_sw(args, gen_net: nn.Module, dis_net: nn.Module, gen_optimizer, dis_optimizer, gen_avg_param, train_loader, epoch,
+def train_sw(args, gen_net: nn.Module, dis_net: nn.Module, slicer:nn.Module, gen_optimizer, dis_optimizer, gen_avg_param, train_loader, epoch,
           writer_dict, schedulers=None):
     writer = writer_dict['writer']
     gen_step = 0
@@ -144,10 +144,13 @@ def train_sw(args, gen_net: nn.Module, dis_net: nn.Module, gen_optimizer, dis_op
             gen_imgs = gen_net(gen_z)
             fake_validity, fake_features = dis_net(gen_imgs, return_feature=True)
             # cal loss
-            X = torch.cat([real_features[-1].view(true_bs, -1),real_validity.view(true_bs,-1)],dim=1)
-            Y = torch.cat([fake_features[-1].view(true_bs, -1),fake_validity.view(true_bs,-1)],dim=1)
+            # X = torch.cat([real_features[-1].view(true_bs, -1),real_validity.view(true_bs,-1)],dim=1)
+            # Y = torch.cat([fake_features[-1].view(true_bs, -1),fake_validity.view(true_bs,-1)],dim=1)
+            X = real_features[-1]
+            Y = fake_features[-1]
             # cal loss
-            g_loss =  SW(X,Y,L=args.L)
+            slicer.reset()
+            g_loss = one_dimensional_Wasserstein(slicer(X), slicer(Y), p=2)
 
             g_loss.backward()
             gen_optimizer.step()
@@ -175,7 +178,7 @@ def train_sw(args, gen_net: nn.Module, dis_net: nn.Module, gen_optimizer, dis_op
 
         writer_dict['train_global_steps'] = global_steps + 1
 
-def train_maxsw(args, gen_net: nn.Module, dis_net: nn.Module, gen_optimizer, dis_optimizer, gen_avg_param, train_loader, epoch,
+def train_maxsw(args, gen_net: nn.Module, dis_net: nn.Module,  slicer:nn.Module, gen_optimizer, dis_optimizer, slicer_optimizer, gen_avg_param, train_loader, epoch,
           writer_dict, schedulers=None):
     writer = writer_dict['writer']
     gen_step = 0
@@ -222,9 +225,22 @@ def train_maxsw(args, gen_net: nn.Module, dis_net: nn.Module, gen_optimizer, dis
             gen_imgs = gen_net(gen_z)
             fake_validity,fake_features = dis_net(gen_imgs,return_feature=True)
             # cal loss
-            X = torch.cat([real_features[-1].view(true_bs, -1), real_validity.view(true_bs, -1)], dim=1)
-            Y = torch.cat([fake_features[-1].view(true_bs, -1), fake_validity.view(true_bs, -1)], dim=1)
-            g_loss,theta = maxSW(X,Y,max_iter=args.s_max_iter,lr=args.s_lr)
+            # X = torch.cat([real_features[-1].view(true_bs, -1), real_validity.view(true_bs, -1)], dim=1)
+            # Y = torch.cat([fake_features[-1].view(true_bs, -1), fake_validity.view(true_bs, -1)], dim=1)
+            # cal loss
+            X = real_features[-1]
+            Y = fake_features[-1]
+            # cal loss
+            Xdetach = X.detach()
+            Ydetach = Y.detach()
+            slicer.project_parameters()
+            for _ in range(args.s_max_iter):
+                slicer_loss = -one_dimensional_Wasserstein(slicer(Xdetach), slicer(Ydetach), p=2)
+                slicer_optimizer.zero_grad()
+                slicer_loss.backward()
+                slicer_optimizer.step()
+                slicer.project_parameters()
+            g_loss = one_dimensional_Wasserstein(slicer(X), slicer(Y), p=2)
             g_loss = g_loss
             g_loss.backward()
             gen_optimizer.step()
@@ -590,17 +606,29 @@ def rand_projections(dim, num_projections=1000):
     projections = projections / torch.sqrt(torch.sum(projections ** 2, dim=1, keepdim=True))
     return projections
 
-def one_dimensional_Wasserstein(X,Y,theta,p):
-    X_prod = torch.matmul(X, theta.transpose(0, 1))
-    Y_prod = torch.matmul(Y, theta.transpose(0, 1))
+# def one_dimensional_Wasserstein(X,Y,theta,p):
+#     X_prod = torch.matmul(X, theta.transpose(0, 1))
+#     Y_prod = torch.matmul(Y, theta.transpose(0, 1))
+#     wasserstein_distance = torch.abs(
+#         (
+#                 torch.sort(X_prod.transpose(0, 1), dim=1)[0]
+#                 - torch.sort(Y_prod.transpose(0, 1), dim=1)[0]
+#         )
+#     )
+#     wasserstein_distance = torch.pow(torch.sum(torch.pow(wasserstein_distance, p), dim=1), 1.0 / p)
+#     wasserstein_distance=torch.pow(torch.pow(wasserstein_distance, p).mean(), 1.0 / p)
+#     return wasserstein_distance
+def one_dimensional_Wasserstein(X_prod,Y_prod,p):
+    X_prod = X_prod.view(X_prod.shape[0], -1)
+    Y_prod = Y_prod.view(Y_prod.shape[0], -1)
     wasserstein_distance = torch.abs(
         (
-                torch.sort(X_prod.transpose(0, 1), dim=1)[0]
-                - torch.sort(Y_prod.transpose(0, 1), dim=1)[0]
+                torch.sort(X_prod, dim=0)[0]
+                - torch.sort(Y_prod, dim=0)[0]
         )
     )
-    wasserstein_distance = torch.pow(torch.sum(torch.pow(wasserstein_distance, p), dim=1), 1.0 / p)
-    wasserstein_distance=torch.pow(torch.pow(wasserstein_distance, p).mean(), 1.0 / p)
+    wasserstein_distance = torch.pow(torch.sum(torch.pow(wasserstein_distance, p), dim=0), 1.0 / p)
+    wasserstein_distance = torch.pow(torch.pow(wasserstein_distance, p).mean(), 1.0 / p)
     return wasserstein_distance
 def k_dimensional_Wasserstein(X,Y,U,p,device="cuda"):
     X_prod = torch.matmul(X, U)
@@ -649,3 +677,57 @@ def PRW(X,Y,k,p=2, max_iter=100, lr=1e-2,device="cuda"):
         U.data = torch.qr(U)[0]
     wasserstein_distance=k_dimensional_Wasserstein(X,Y,U,p,device)
     return wasserstein_distance,U
+def train_swg(args, gen_net: nn.Module, slicer:nn.Module, gen_optimizer, gen_avg_param, train_loader, epoch,
+          writer_dict, schedulers=None):
+    writer = writer_dict['writer']
+    gen_step = 0
+
+    # train mode
+    gen_net = gen_net.train()
+
+    for iter_idx, (imgs, _) in enumerate(tqdm(train_loader)):
+        true_bs = imgs.shape[0]
+        if (true_bs < args.gen_batch_size):
+            break
+        global_steps = writer_dict['train_global_steps']
+
+        # Adversarial ground truths
+        real_imgs = imgs.type(torch.cuda.FloatTensor)
+        true_bs = imgs.shape[0]
+        # Sample noise as generator input
+        z = torch.cuda.FloatTensor(np.random.normal(0, 1, (true_bs, args.latent_dim)))
+
+        # -----------------
+        #  Train Generator
+        # -----------------
+        if global_steps % args.n_critic == 0:
+            gen_optimizer.zero_grad()
+            gen_z = torch.cuda.FloatTensor(np.random.normal(0, 1, (true_bs, args.latent_dim)))
+            gen_imgs = gen_net(gen_z)
+            # cal loss
+            slicer.reset()
+            g_loss = one_dimensional_Wasserstein(slicer(gen_imgs), slicer(real_imgs), p=2)
+
+            g_loss.backward()
+            gen_optimizer.step()
+
+            # adjust learning rate
+            if schedulers:
+                gen_scheduler = schedulers
+                g_lr = gen_scheduler.step(global_steps)
+                writer.add_scalar('LR/g_lr', g_lr, global_steps)
+
+            # moving average weight
+            for p, avg_p in zip(gen_net.parameters(), gen_avg_param):
+                avg_p.mul_(0.999).add_(0.001, p.data)
+
+            writer.add_scalar('g_loss', g_loss.item(), global_steps)
+            gen_step += 1
+
+        # verbose
+        if gen_step and iter_idx % args.print_freq == 0:
+            tqdm.write(
+                "[Epoch %d/%d] [Batch %d/%d] [G loss: %f]" %
+                (epoch, args.max_epoch, iter_idx % len(train_loader), len(train_loader), g_loss.item()))
+
+        writer_dict['train_global_steps'] = global_steps + 1

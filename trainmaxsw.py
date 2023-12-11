@@ -23,6 +23,7 @@ import torch.nn as nn
 from tensorboardX import SummaryWriter
 from tqdm import tqdm
 from copy import deepcopy
+import yaml
 np.random.seed(1)
 torch.manual_seed(1)
 torch.backends.cudnn.enabled = True
@@ -76,10 +77,12 @@ def main():
     # fid stat
     if args.dataset.lower() == 'cifar10':
         fid_stat = 'fid_stat/fid_stats_cifar10_train.npz'
+        bottom_width = 32
     elif args.dataset.lower() == 'stl10':
         fid_stat = 'fid_stat/fid_stats_stl10.npz'
     elif args.dataset.lower() == 'celeba':
         fid_stat = 'fid_stat/fid_stats_celeba.npz'
+        bottom_width = 64
     elif args.dataset.lower() == 'celebahq':
         fid_stat = 'fid_stat/fid_stats_celebahq.npz'
     elif args.dataset.lower() == 'lsun_church':
@@ -87,7 +90,74 @@ def main():
     else:
         raise NotImplementedError(f'no fid stat for {args.dataset.lower()}')
     assert os.path.exists(fid_stat)
-
+    ######################################################################
+    ch = 3
+    if args.use_D:
+        bottom_width = 8
+        ch = 128
+    args.L = 1
+    # Slicers
+    __acts__ = {"relu": torch.nn.ReLU(), "tanh": torch.nn.Tanh(), "sigmoid": torch.nn.Sigmoid(), "exp": torch.exp, "log": torch.log, "base": None}
+    if args.dataset == "MNIST":
+        if args.activation:
+            if args.slicer == "sw":
+                from slicers import NonLinearBase_Slicer
+                slicer = NonLinearBase_Slicer(d=args.x_dim,L=args.L, activation=__acts__[args.activation[0]])
+            elif args.slicer == "csw":
+                activation = [*map(__acts__.get, args.activation)]
+                from slicers import NonLinearConv_MNIST_Slicer_
+                slicer = NonLinearConv_MNIST_Slicer_(L=args.L, activation=activation)
+            elif args.slicer == "hsw":
+                activation = [*map(__acts__.get, args.activation)]
+                from slicers import Hierarchical_Slicer_MNIST
+                slicer = Hierarchical_Slicer_MNIST(args.L, activation=activation)
+        else:
+            if args.slicer == "sw":
+                from slicers import Base_Slicer
+                slicer = Base_Slicer(d=args.x_dim,L=args.L)
+            elif args.slicer == "csw":
+                from slicers import Conv_MNIST_Slicer
+                slicer = Conv_MNIST_Slicer(L=args.L)
+            elif args.slicer == "hsw":
+                from slicers import Hierarchical_Slicer_MNIST
+                slicer = Hierarchical_Slicer_MNIST(args.L)
+            elif args.slicer == "circular":
+                from slicers import GSW
+                slicer = GSW(ftype='circular', d=28*28, L =args.L, radius=args.radius)
+    elif args.dataset.lower() == "cifar10" or args.dataset.lower() == 'celeba':
+        if not args.activation:
+            if args.slicer == "sw":
+                from slicers import Base_Slicer
+                slicer = Base_Slicer(d=args.x_dim,L=args.L)
+            elif args.slicer == "csw":
+                from slicers import ConvSlicer
+                slicer = ConvSlicer(L=args.L, ch=ch, bottom_width=bottom_width,type='csw')
+            elif args.slicer == "hsw":
+                from slicers import Hierarchical_Slicer
+                slicer = Hierarchical_Slicer(3, args.L, args.f_dim)
+            elif args.slicer == "sh":
+                from slicers import SH_Slicer
+                slicer = SH_Slicer(args.L)
+        else:
+            if args.slicer == "sw":
+                from slicers import NonLinearBase_Slicer_
+                slicer = NonLinearBase_Slicer_(d=args.x_dim,L=args.L, activation=__acts__[args.activation[0]])
+            elif args.slicer == "csw":
+                activation = [*map(__acts__.get, args.activation)]
+                from slicers import NonLinearConvSlicer_
+                slicer = NonLinearConvSlicer_(L=args.L, ch=ch, bottom_width=bottom_width, activation=activation)
+            elif args.slicer == "hsw":
+                activation = [*map(__acts__.get, args.activation)]
+                from slicers import Hierarchical_Slicer
+                slicer = Hierarchical_Slicer(3, args.L, args.f_dim, activation=activation)
+            elif args.slicer == "sh":
+                activation = [*map(__acts__.get, args.activation)]
+                from slicers import SH_Slicer
+                slicer = SH_Slicer(args.L, activation=activation)
+    slicer_optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, slicer.parameters()),
+                                    args.s_lr, (args.beta1, args.beta2))
+    print(slicer)
+    ######################################################################
     # epoch number for dis_net
     args.max_epoch = args.max_epoch * args.n_critic
     if args.max_iter:
@@ -137,12 +207,16 @@ def main():
         'valid_global_steps': start_epoch // args.val_freq,
     }
 
+    # save args
+    with open(args.path_helper['log_path'] + '/args.yaml', 'w') as yaml_file:
+        yaml.dump(vars(args), yaml_file, default_flow_style=False)
+
     # train loop
     fids=[]
     iscores=[]
     lr_schedulers = (gen_scheduler, dis_scheduler) if args.lr_decay else None
     for epoch in tqdm(range(int(start_epoch), int(args.max_epoch)), desc='total progress'):
-        train_maxsw(args, gen_net, dis_net, gen_optimizer, dis_optimizer, gen_avg_param, train_loader, epoch, writer_dict,
+        train_maxsw(args, gen_net, dis_net, slicer, gen_optimizer, dis_optimizer, slicer_optimizer, gen_avg_param, train_loader, epoch, writer_dict,
               lr_schedulers)
 
         if epoch % args.val_freq == 0 or epoch == int(args.max_epoch)-1:
@@ -170,9 +244,11 @@ def main():
             'model': args.model,
             'gen_state_dict': gen_net.state_dict(),
             'dis_state_dict': dis_net.state_dict(),
+            'slicer_state_dict': slicer.state_dict(),
             'avg_gen_state_dict': avg_gen_net.state_dict(),
             'gen_optimizer': gen_optimizer.state_dict(),
             'dis_optimizer': dis_optimizer.state_dict(),
+            'slicer_optimizer': slicer_optimizer.state_dict(),
             'best_fid': best_fid,
             'path_helper': args.path_helper
         }, is_best, args.path_helper['ckpt_path'])
