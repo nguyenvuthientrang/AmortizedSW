@@ -14,7 +14,6 @@ from tqdm import tqdm
 from copy import deepcopy
 import logging
 import ot
-from utils.inception_score import get_inception_score
 from utils.fid_score import calculate_fid_given_paths
 
 logger = logging.getLogger(__name__)
@@ -125,6 +124,9 @@ def train_sw(args, gen_net: nn.Module, dis_net: nn.Module, slicer:nn.Module, gen
 
         real_validity = dis_net(real_imgs)
         fake_imgs = gen_net(z).detach()
+        # print("========================================")
+        # print(fake_imgs.shape)
+        # print("========================================")
         assert fake_imgs.size() == real_imgs.size()
 
         fake_validity = dis_net(fake_imgs)
@@ -148,6 +150,10 @@ def train_sw(args, gen_net: nn.Module, dis_net: nn.Module, slicer:nn.Module, gen
             # Y = torch.cat([fake_features[-1].view(true_bs, -1),fake_validity.view(true_bs,-1)],dim=1)
             X = real_features[-1]
             Y = fake_features[-1]
+            # print("========================================================")
+            # print("features shape:", X.shape)
+            # print("sliced shape:", slicer(X).shape)
+            # print("========================================================")
             # cal loss
             slicer.reset()
             g_loss = one_dimensional_Wasserstein(slicer(X), slicer(Y), p=2)
@@ -543,20 +549,21 @@ def validate(args, fixed_z, fid_stat, gen_net: nn.Module, writer_dict):
     # get inception score
     logger.info('=> calculate inception score')
     if args.dataset.lower() == 'lsun_church' or args.dataset.lower() == 'celebahq' :
-        mean, std = get_inception_score(img_list,bs=16)
+        mean, std = 0, 0
     elif args.dataset.lower() == 'stl10':
-        mean, std = get_inception_score(img_list,bs=32)
+        mean, std = 0, 0
     else:
-        mean, std = get_inception_score(img_list,bs=100)
+        mean, std = 0, 0
 
     # get fid score
+    kwargs = {'batch_size': args.eval_batch_size, 'device': 'cuda', 'dims': 2048}
     logger.info('=> calculate fid score')
     if args.dataset.lower() == 'lsun_church' or args.dataset.lower() == 'celebahq' :
-        fid_score = calculate_fid_given_paths([fid_buffer_dir, fid_stat], inception_path=None,batch_size=args.eval_batch_size)
+        fid_score = calculate_fid_given_paths([fid_buffer_dir, fid_stat], **kwargs)
     elif args.dataset.lower() == 'stl10':
-        fid_score = calculate_fid_given_paths([fid_buffer_dir, fid_stat], inception_path=None,batch_size=args.eval_batch_size)
+        fid_score = calculate_fid_given_paths([fid_buffer_dir, fid_stat], **kwargs)
     else:
-        fid_score = calculate_fid_given_paths([fid_buffer_dir, fid_stat], inception_path=None,batch_size=args.eval_batch_size)
+        fid_score = calculate_fid_given_paths([fid_buffer_dir, fid_stat], **kwargs)
     os.system('rm -r {}'.format(fid_buffer_dir))
 
     writer.add_image('sampled_images', img_grid, global_steps)

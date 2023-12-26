@@ -13,8 +13,8 @@ import models
 import datasets
 from functions import train_sw, validate, LinearLrDecay, load_params, copy_params
 from utils.utils import set_log_dir, save_checkpoint, create_logger
-from utils.inception_score import _init_inception
-from utils.fid_score import create_inception_graph, check_or_download_inception
+# from utils.inception_score import _init_inception
+# from utils.fid_score import create_inception_graph, check_or_download_inception
 
 import torch
 import os
@@ -36,9 +36,9 @@ def main():
     torch.cuda.manual_seed(args.random_seed)
 
     # set tf env
-    _init_inception()
-    inception_path = check_or_download_inception(None)
-    create_inception_graph(inception_path)
+    # _init_inception()
+    # inception_path = check_or_download_inception(None)
+    # create_inception_graph(inception_path)
 
     # import network
     gen_net = eval('models.'+args.model+'.Generator')(args=args).cuda()
@@ -77,26 +77,35 @@ def main():
 
     # fid stat
     if args.dataset.lower() == 'cifar10':
-        fid_stat = 'fid_stat/fid_stats_cifar10_train.npz'
-        bottom_width = 32
+        fid_stat = 'fid_stat/cifar10_train_stat.npy'
+        bottom_width = 8
         x_dim = 128*8*8
+        ch = 128
     elif args.dataset.lower() == 'stl10':
-        fid_stat = 'fid_stat/fid_stats_stl10.npz'
+        fid_stat = 'fid_stat/stl10_stat.npy'
+        bottom_width = 8
+        x_dim = 128*8*8
+        ch = 128
     elif args.dataset.lower() == 'celeba':
         fid_stat = 'fid_stat/fid_stats_celeba.npz'
-        bottom_width = 64
+        bottom_width = 8
+        x_dim = 128*8*8
+        ch = 128
     elif args.dataset.lower() == 'celebahq':
         fid_stat = 'fid_stat/fid_stats_celebahq.npz'
     elif args.dataset.lower() == 'lsun_church':
-        fid_stat = 'fid_stat/fid_stats_lsun_church.npz'
+        fid_stat = 'fid_stat/lsun_church_stat.npy'
+        bottom_width = 8
+        x_dim = 128*8*8
+        ch = 128
     else:
         raise NotImplementedError(f'no fid stat for {args.dataset.lower()}')
     assert os.path.exists(fid_stat)
     ######################################################################
-    ch = 3
-    if args.use_D:
-        bottom_width = 8
-        ch = 128
+    # ch = 3
+    # if args.use_D:
+    #     bottom_width = 8
+    #     ch = 128
     # Slicers
     __acts__ = {"relu": torch.nn.ReLU(), "tanh": torch.nn.Tanh(), "sigmoid": torch.nn.Sigmoid(), "exp": torch.exp, "log": torch.log, "base": None}
     if args.dataset == "MNIST":
@@ -125,7 +134,7 @@ def main():
             elif args.slicer == "circular":
                 from slicers import GSW
                 slicer = GSW(ftype='circular', d=28*28, L =args.L, radius=args.radius)
-    elif args.dataset.lower() == "cifar10" or args.dataset.lower() == 'celeba':
+    elif args.dataset.lower() == "cifar10" or args.dataset.lower() == 'celeba' or args.dataset.lower() == 'stl10'  or args.dataset.lower() == 'lsun' or args.dataset.lower() == 'lsun_church':
         if not args.activation:
             if args.slicer == "sw":
                 from slicers import Base_Slicer
@@ -141,8 +150,8 @@ def main():
                 slicer = SH_Slicer(args.L)
         else:
             if args.slicer == "sw":
-                from slicers import NonLinearBase_Slicer_
-                slicer = NonLinearBase_Slicer_(d=x_dim,L=args.L, activation=__acts__[args.activation[0]])
+                from slicers import NonLinearBase_Slicer
+                slicer = NonLinearBase_Slicer(d=x_dim,L=args.L, activation=__acts__[args.activation[0]])
             elif args.slicer == "csw":
                 activation = [*map(__acts__.get, args.activation)]
                 from slicers import NonLinearConvSlicer_

@@ -10,8 +10,17 @@ data/
 *.pth
 *.png
 .swp
+experiments/
 experiments_/
 TODO.md
+stl10_logs/
+celeba_logs/
+lsun_church_logs/
+experiments_celeba
+experiments_lsun
+experiments_stl10
+experiments\
+_cache_datachurchoutdoortrainlmdb
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
